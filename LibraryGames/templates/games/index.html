@@ -1,0 +1,89 @@
+{% extends 'base.html' %}
+
+
+{% block header %}
+<h1>
+  {% block title %}
+    Games
+    {% if inverted %}
+    - NOT
+    {% endif %}
+    {% if listname %}
+    - {{listname}}
+    {% endif %}
+    {% endblock %}
+    {% if listname %}
+    {% if inverted %}
+      - <a href="{{ url_for('games.set_list', listname=listname) }}">[Normal]</a>
+    {% else %}
+      - <a href="{{ url_for('games.set_list_invert', listname=listname) }}">[Invert]</a>
+    {% endif %}
+    {% endif %}
+</h1>
+{% endblock %}
+
+{% block content %}
+  {% if editlist %}
+  <form method='post'>
+  {% endif %}
+  <table>
+    <tr>
+      {% if edit %}
+      <th></th>
+      {% endif %}
+      {% if editlist %}
+      <th><input type="submit" value="Save"></th>
+      {% endif %}
+      <th>Game (BGG Link)</th>
+      <th>Library</th>
+      <th><a href="{{ request.PATH_INFO }}?sort=rank">BGG Rank</a></th>
+      <th>Other Rank</th>
+      <th><a href="{{ request.PATH_INFO }}?sort=hot">Hot Rank</a></th>
+      <th><a href="{{ request.PATH_INFO }}?sort=date">Date Added</a></th>
+    </tr>
+
+  {% for game in bgggames %}
+      <tr>
+        {% if edit %}
+        <td>
+          <a class="action" href="{{ url_for('games.set_edit_gameid', gameid=game['id']) }}">Edit</a>
+          <a class="action" href="{{ url_for('games.set_null_gameid', gameid=game['id']) }}">Null</a>
+        </td>
+        {% endif %}
+        {% if editlist %}
+        <td><input type="checkbox" name="{{game['id']}}" {% if game['id'] in checks %} checked {% endif %}></td>
+        {% endif %}
+        <td><a class='link' title="{{game['lname']}}" href="{{game['bggurl']}}">{{ game['name'] }}</a><span class='year'> ({{game['year']}}) </span></td>
+        <td><a class='link' href="{{game['url']}}"> Checkout </a></td>
+        <td>{{game['bggrank']}}</td>
+        <td>
+          {% for rank in game['ranks'] %}
+          {{rank['friendlyname']}}:{{rank['value']}}</br> 
+          {% endfor %}
+        </td>
+        <td>{{game['hot']}}</td>
+        <td>{{game['added']}} </td>
+      </tr>
+  {% endfor %}
+
+  {% for game in othergames %}
+      <tr>
+        {% if edit %}
+        <td><a class="action" href="{{ url_for('games.set_edit_gameid', gameid=game['id']) }}">Edit</a></td>
+        {% endif %}
+        {% if editlist %}
+        <td><input type="checkbox" name="{{game['id']}}"{% if game['id'] in checks %} checked {% endif %}></td>
+        {% endif %}
+        <td>{{ game['lname'] }}</td>
+        <td><a class='link' href="{{game['url']}}">Checkout</a></td>
+        <td></td>
+        <td></td>
+        <td></td>
+        <td>{{game['added']}} </td>
+      </tr>
+  {% endfor %}
+  </table>
+  {% if editlist %}
+  </form>
+  {% endif %}
+{% endblock %}

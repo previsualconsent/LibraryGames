@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+
+{% block header %}
+  <h1>{% block title %}Edit BGG ID{% endblock %}</h1>
+{% endblock %}
+
+{% block content %}
+  <table>
+    <tr>
+      <td> <strong>Library Name</strong>:{{ game['name'] }} (<a href="https://boardgamegeek.com/geeksearch.php?action=search&objecttype=boardgame&q={{game['name']}}">Search</a>) (<a href="{{ game['url']}}">Checkout</a>)</td>
+    </tr>
+    <tr>
+      {% if game['bggname'] %}
+      <td> <strong>BGG Name</strong>: {{ game['bggname'] }} (<a href="https://boardgamegeek.com/geeksearch.php?action=search&objecttype=boardgame&q={{game['bggname']}}">Search</a>)(<a href="{{ game['bggurl']}}">BGG</a>)</td>
+      {% else %}
+      <td> <strong>BGG Name</strong>: </td>
+      {% endif %}
+    </tr>
+  </table>
+  <form method="post">
+    <label for="bggid">BGG ID</label>
+    <input name="bggid" id="bggid" value="{{ request.form['bggid'] or game['bggid'] }}" required>
+    <input type="submit" value="Save">
+  </form>
+{% endblock %}

@@ -1,0 +1,6 @@
+include LICENSE
+include LibraryGames/schema.sql
+graft LibraryGames/static
+graft LibraryGames/templates
+graft tests
+global-exclude *.pyc
