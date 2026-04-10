@@ -1,12 +1,28 @@
 -- Initialize the database.
 -- Drop any existing data and create empty tables.
 
-DROP TABLE IF EXISTS games;
+DROP TABLE IF EXISTS user;
+DROP TABLE IF EXISTS post;
 
 DROP TABLE IF EXISTS library;
 DROP TABLE IF EXISTS bgg;
 DROP TABLE IF EXISTS list;
 DROP TABLE IF EXISTS list_game;
+
+CREATE TABLE user (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT UNIQUE NOT NULL,
+  password TEXT NOT NULL
+);
+
+CREATE TABLE post (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  author_id INTEGER NOT NULL,
+  created TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  FOREIGN KEY (author_id) REFERENCES user (id)
+);
 
 CREATE TABLE library (
   id INTEGER PRIMARY KEY,
@@ -26,5 +42,5 @@ CREATE TABLE bgg (
 CREATE TABLE list_game (
   game_id INT,
   list_name TEXT,
-  FOREIGN KEY (game_id) REFERENCES game (id)
+  FOREIGN KEY (game_id) REFERENCES library (id)
 );

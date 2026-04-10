@@ -19,7 +19,7 @@
   </table>
   <form method="post">
     <label for="bggid">BGG ID</label>
-    <input name="bggid" id="bggid" value="{{ request.form['bggid'] or game['bggid'] }}" required>
+    <input name="bggid" id="bggid" value="{{ request.form.get('bggid', game['bggid'] or '') }}" required>
     <input type="submit" value="Save">
   </form>
 {% endblock %}

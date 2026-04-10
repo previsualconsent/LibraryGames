@@ -18,9 +18,9 @@ def index():
     """Show all the posts, most recent first."""
     db = get_db()
     posts = db.execute(
-        "SELECT id, title, added"
-        " FROM games"
-        " ORDER BY added DESC"
+        "SELECT p.id, title, body, created, author_id, username"
+        " FROM post p JOIN user u ON p.author_id = u.id"
+        " ORDER BY created DESC"
     ).fetchall()
     return render_template("blog/index.html", posts=posts)
 
@@ -78,7 +78,7 @@ def create():
                 (title, body, g.user["id"]),
             )
             db.commit()
-            return redirect(url_for("blog.index"))
+            return redirect(url_for("blog.index", _external=True))
 
     return render_template("blog/create.html")
 
@@ -105,7 +105,7 @@ def update(id):
                 "UPDATE post SET title = ?, body = ? WHERE id = ?", (title, body, id)
             )
             db.commit()
-            return redirect(url_for("blog.index"))
+            return redirect(url_for("blog.index", _external=True))
 
     return render_template("blog/update.html", post=post)
 
@@ -122,4 +122,4 @@ def delete(id):
     db = get_db()
     db.execute("DELETE FROM post WHERE id = ?", (id,))
     db.commit()
-    return redirect(url_for("blog.index"))
+    return redirect(url_for("blog.index", _external=True))

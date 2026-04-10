@@ -10,17 +10,15 @@ import pickle
 from werkzeug.exceptions import abort
 import datetime
 
-from LibraryGames.db import get_db, refresh_db
-from boardgamegeek import BGGClient
-from boardgamegeek.exceptions import *
+from LibraryGames.db import _get_bgg_client, get_db, refresh_db
 
 bp = Blueprint("games", __name__)
 
 
 def render(edit=False, listname=None, editlist=False, invert=False):
-    sortby = request.args.get("sort","rank")
-    bgg = BGGClient()
-    hot = bgg.hot_items("boardgame")
+    sortby = request.args.get("sort", "rank")
+    bgg = _get_bgg_client()
+    hot = bgg.hot_items("boardgame") if bgg else []
     hot_ranks = {}
     for h in hot:
         hot_ranks[h.id] = h.rank
@@ -31,8 +29,10 @@ def render(edit=False, listname=None, editlist=False, invert=False):
     wheres = ""
     games_in_list = []
     if listname is not None:
-        for row in db.execute(f"SELECT game_id from list_game where list_name LIKE '{listname}'").fetchall():
-            games_in_list.append(row['game_id'])
+        for row in db.execute(
+            "SELECT game_id FROM list_game WHERE list_name LIKE ?", (listname,)
+        ).fetchall():
+            games_in_list.append(row["game_id"])
 
     sql = (
         "SELECT l.id as id, l.name as lname, l.added, l.url, g.id as bggid, g.gamep"
@@ -97,7 +97,11 @@ def index():
 @bp.route("/refresh", methods=("GET", "POST"))
 def refresh():
     """Refresh db"""
-    refresh_db()
+    try:
+        refresh_db()
+        flash("Games database refreshed.")
+    except Exception as exc:
+        flash(f"Refresh failed: {exc}")
     return redirect(url_for("games.index"))
 
 @bp.route("/edit")
@@ -109,10 +113,15 @@ def set_edit():
 def set_edit_gameid(gameid):
     """edit db"""
     db = get_db()
+    lookup_failed = False
     if request.method == "POST":
-        bggid = request.form['bggid']
-        bgg = BGGClient()
-        bgg_game = bgg.game(game_id=bggid)
+        bggid = request.form["bggid"]
+        bgg = _get_bgg_client()
+        try:
+            bgg_game = bgg.game(game_id=bggid)
+        except Exception:
+            bgg_game = None
+
         if bgg_game:
             db.execute(
                 "REPLACE INTO bgg (id, gamep) VALUES (?,?)",
@@ -123,6 +132,14 @@ def set_edit_gameid(gameid):
                 (bgg_game.id, gameid),
             )
             db.commit()
+            flash("BGG ID updated.")
+            return redirect(url_for("games.set_edit_gameid", gameid=gameid))
+        else:
+            lookup_failed = True
+            flash(
+                f"Could not fetch BoardGameGeek details for ID {bggid}. "
+                "The BGG API is not returning item details in this environment."
+            )
 
     game = db.execute(
         "SELECT *"
@@ -131,13 +148,18 @@ def set_edit_gameid(gameid):
         " WHERE l.id = ?",
         (gameid,)
     ).fetchone()
+    if game is None:
+        abort(404)
+
     game = dict(game)
-    if(game['gamep']):
-        gamep = pickle.loads(game['gamep'])
-        game['bggname'] = gamep.name
+    if game["gamep"]:
+        gamep = pickle.loads(game["gamep"])
+        game["bggname"] = gamep.name
         game["bggurl"] = f"https://boardgamegeek.com/boardgame/{gamep.id}/"
     else:
-        game['bggname'] = None
+        game["bggname"] = None
+        if lookup_failed and request.method == "POST":
+            game["bggid"] = request.form.get("bggid", game.get("bggid"))
 
     return render_template("games/update.html", game=game)
 
@@ -145,11 +167,13 @@ def set_edit_gameid(gameid):
 def set_null_gameid(gameid):
     """null gameid in db"""
     db = get_db()
-    bgg = BGGClient()
-    db.execute(
+    updated = db.execute(
         "UPDATE library set bgg_id = ? where id = ?",
         (None, gameid),
     )
+    if updated.rowcount == 0:
+        abort(404)
+
     db.commit()
 
     return render(edit=True)
@@ -158,8 +182,10 @@ def set_null_gameid(gameid):
 def show_lists():
     """show lists"""
     db = get_db()
-    list_names = [r['list_name'] for r in  set(db.execute("SELECT list_name from list_game").fetchall())]
-    return render_template("games/lists.html", names=sorted(list_names))
+    list_names = sorted(
+        {row["list_name"] for row in db.execute("SELECT list_name FROM list_game").fetchall()}
+    )
+    return render_template("games/lists.html", names=list_names)
 
 @bp.route("/list/<listname>")
 def set_list(listname):
@@ -178,16 +204,9 @@ def set_editlist(listname):
         db = get_db()
         db.execute("DELETE FROM list_game where list_name LIKE ?", (listname,))
         for key in request.form:
-            print(key, request.form[key])
             db.execute(
                 "INSERT INTO list_game (game_id, list_name) VALUES (?,?)",
                 (key, listname),
                 )
         db.commit()
-            #db.execute(
-            #    "UPDATE library set bgg_id = ? where id = ?",
-            #    (bgg_game.id, gameid),
-            #)
-        for row in db.execute("SELECT * from list_game").fetchall():
-            print(dict(row))
     return render(listname=listname, editlist=True)

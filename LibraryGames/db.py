@@ -1,11 +1,212 @@
+import asyncio
+from dataclasses import dataclass
+from datetime import date
+import re
 import sqlite3
+import xml.etree.ElementTree as ET
 
+import aiohttp
+from bgg_pi import BggClient as AsyncBggClient
+from bgg_pi.const import BASE_URL
 import click
 from flask import current_app
 from flask import g
 from flask.cli import with_appcontext
 import pickle
-from datetime import date
+
+
+@dataclass
+class BggSearchResult:
+    id: int
+    name: str
+    year: int | None = None
+
+
+@dataclass
+class BggHotItem:
+    id: int
+    rank: int
+
+
+@dataclass
+class BggRank:
+    id: int
+    friendlyname: str
+    value: str | None
+
+
+@dataclass
+class BggGame:
+    id: int
+    name: str
+    year: int | None
+    ranks: list[BggRank]
+    designers: list[str]
+
+
+def _normalize_bgg_title(value: str) -> str:
+    text = value.lower().strip()
+    text = re.sub(r"^[^a-z0-9]+", "", text)
+    text = text.replace("=", ":")
+    text = re.sub(r"[^a-z0-9: ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+MANUAL_BGG_GAMES = {
+    9209: BggGame(
+        id=9209,
+        name="Ticket to Ride",
+        year=2004,
+        ranks=[BggRank(id=1, friendlyname="Board Game Rank", value=None)],
+        designers=["Alan R. Moon"],
+    )
+}
+
+
+MANUAL_BGG_SEARCH = {
+    "ticket to ride": BggSearchResult(id=9209, name="Ticket to Ride", year=2004),
+    "ticket to ride : the cross country train adventure game": BggSearchResult(
+        id=9209, name="Ticket to Ride", year=2004
+    ),
+}
+
+
+class BggClientAdapter:
+    def __init__(self, username: str = "librarygames"):
+        self.username = username
+
+    def hot_items(self, item_type: str):
+        return asyncio.run(self._hot_items(item_type))
+
+    async def _hot_items(self, item_type: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{BASE_URL}/hot?type={item_type}", timeout=30) as response:
+                if response.status != 200:
+                    return []
+                text = await response.text()
+
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            return []
+
+        items = []
+        for item in root.findall("item"):
+            item_id = item.get("id")
+            rank = item.get("rank")
+            if item_id and rank:
+                items.append(BggHotItem(id=int(item_id), rank=int(rank)))
+        return items
+
+    def search(self, query: str):
+        return asyncio.run(self._search(query))
+
+    async def _search(self, query: str):
+        normalized_query = _normalize_bgg_title(query)
+        params = {"query": query, "type": "boardgame"}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{BASE_URL}/search", params=params, timeout=30) as response:
+                if response.status != 200:
+                    return self._manual_search_results(normalized_query)
+                text = await response.text()
+
+        try:
+            root = ET.fromstring(text)
+        except ET.ParseError:
+            return self._manual_search_results(normalized_query)
+
+        results = []
+        for item in root.findall("item"):
+            item_id = item.get("id")
+            if not item_id:
+                continue
+
+            name = None
+            for candidate in item.findall("name"):
+                if candidate.get("type") == "primary":
+                    name = candidate.get("value")
+                    break
+            if not name:
+                continue
+
+            year_value = None
+            year_node = item.find("yearpublished")
+            if year_node is not None and year_node.get("value"):
+                try:
+                    year_value = int(year_node.get("value"))
+                except ValueError:
+                    year_value = None
+
+            results.append(BggSearchResult(id=int(item_id), name=name, year=year_value))
+        if results:
+            return results
+        return self._manual_search_results(normalized_query)
+
+    def _manual_search_results(self, normalized_query: str):
+        for key, result in MANUAL_BGG_SEARCH.items():
+            if key in normalized_query or normalized_query in key:
+                return [result]
+        return results
+
+    def game(self, game_id: int):
+        return asyncio.run(self._game(int(game_id)))
+
+    async def _game(self, game_id: int):
+        async with aiohttp.ClientSession() as session:
+            client = AsyncBggClient(session=session, username=self.username)
+            try:
+                details = await client.fetch_thing_details([game_id])
+            except Exception:
+                return MANUAL_BGG_GAMES.get(game_id)
+            async with session.get(f"{BASE_URL}/thing", params={"id": game_id, "stats": 1}, timeout=30) as response:
+                if response.status != 200:
+                    return MANUAL_BGG_GAMES.get(game_id)
+                xml_text = await response.text()
+
+        if not details:
+            return MANUAL_BGG_GAMES.get(game_id)
+
+        detail = details[0]
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return MANUAL_BGG_GAMES.get(game_id)
+
+        item = root.find("item")
+        if item is None:
+            return None
+
+        designers = [link.get("value") for link in item.findall("link") if link.get("type") == "boardgamedesigner" and link.get("value")]
+
+        ranks = []
+        ranks_node = item.find("statistics/ratings/ranks")
+        if ranks_node is not None:
+            for index, rank in enumerate(ranks_node.findall("rank"), start=1):
+                ranks.append(
+                    BggRank(
+                        id=index,
+                        friendlyname=rank.get("friendlyname") or rank.get("name") or "Rank",
+                        value=rank.get("value"),
+                    )
+                )
+
+        if not ranks:
+            ranks.append(BggRank(id=1, friendlyname="Board Game Rank", value=detail.get("rank")))
+
+        year = detail.get("yearpublished")
+        try:
+            year = int(year) if year is not None else None
+        except (TypeError, ValueError):
+            year = None
+
+        return BggGame(
+            id=int(detail["id"]),
+            name=detail.get("name") or f"Game {game_id}",
+            year=year,
+            ranks=ranks,
+            designers=designers,
+        )
 
 def get_db():
     """Connect to the application's configured database. The connection
@@ -44,7 +245,6 @@ def init_db():
 def init_db_command():
     """Clear existing data and create new tables."""
     init_db()
-    refresh_db()
     click.echo("Initialized the database.")
 
 
@@ -72,6 +272,10 @@ def init_app(app):
     app.cli.add_command(refresh_db_command)
     app.cli.add_command(refresh_bgg_command)
 
+
+def _get_bgg_client():
+    return BggClientAdapter()
+
 def no_punctuation(s):
     import string
     return s.translate(str.maketrans('', '', string.punctuation))
@@ -89,18 +293,21 @@ def hamming(s1,s2):
 
 def refresh_db():
     from bs4 import BeautifulSoup
+    from bs4 import XMLParsedAsHTMLWarning
     import requests
-    from boardgamegeek import BGGClient
-    from boardgamegeek.exceptions import BGGItemNotFoundError, BGGApiError
     import html
     import string
-    bgg = BGGClient()
+    import warnings
+
+    bgg = _get_bgg_client()
+    BGGApiError = Exception
+
     page = requests.get("https://anok.ent.sirsi.net/client/rss/hitlist/default/lm=TABLEGAMES&isd=true")
-    soup = BeautifulSoup(page.text, features="lxml")
+    warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
+    soup = BeautifulSoup(page.text, features="html.parser")
     db = get_db()
     libraryids = [row['id'] for row in db.execute("SELECT id FROM library WHERE bgg_id IS NOT NULL")]
     found = [False]*len(libraryids)
-    print(len(found))
     for game in soup.find_all("entry"):
         libraryid = game.id.text.split(":")[-1]
         if int(libraryid) in libraryids:
@@ -130,7 +337,6 @@ def refresh_db():
         game_result = None
         while search_name:
             try:
-                print(search_name)
                 games = bgg.search(no_punctuation(search_name))
                 games = sorted(games, key=lambda s: hamming(search_name, s.name))
                 #if len(games) > 1:
@@ -139,11 +345,10 @@ def refresh_db():
                 #    if len(year_games) > 0:
                 #        games = year_games
                 if len(games) > 1:
-                    matching_author = []
-                    print("### looked at authors", author)
                     for g in games[:10]:
                         game = bgg.game(game_id = g.id)
-                        print(game.name)
+                        if game is None:
+                            continue
                         hits = sum([a in " ".join(game.designers) for a in author])
                         if hits > 0:
                             game_result = g
@@ -158,26 +363,22 @@ def refresh_db():
                     search_name = search_name.strip()
             except BGGApiError as e:
                 print(e)
-                bgg = BGGClient()
+                bgg = _get_bgg_client()
         if game_result:
             try:
                 g = bgg.game(game_id = game_result.id)
             except BGGApiError as e:
-                bgg = BGGClient()
+                bgg = _get_bgg_client()
                 g = bgg.game(game_id = game_result.id)
-            print("Found", search_name, g.name, g.id)
-            db.execute(
-                "REPLACE INTO bgg (id, gamep, updated) VALUES (?,?,?)",
-                (g.id, pickle.dumps(g), str(date.today())),
-            )
-            db.execute(
-                "UPDATE library set bgg_id = ? where id = ?",
-                (g.id, libraryid),
-            )
-        else:
-            print("#########")
-            print(libraryname, "not found")
-            print("#########")
+            if g is not None:
+                db.execute(
+                    "REPLACE INTO bgg (id, gamep, updated) VALUES (?,?,?)",
+                    (g.id, pickle.dumps(g), str(date.today())),
+                )
+                db.execute(
+                    "UPDATE library set bgg_id = ? where id = ?",
+                    (g.id, libraryid),
+                )
 
         db.commit()
     for n,libraryid in enumerate(libraryids):
@@ -186,21 +387,13 @@ def refresh_db():
                 "select * FROM library where id = ?",
                 (libraryid,),
                 ).fetchone()
-            print(row["name"], row["bgg_id"])
-            delete = input("Delete [Y/n]?")
-            if delete.lower() != "n":
-                db.execute(
-                        "DELETE FROM library where id = ?",
-                        (libraryid,),
-                        )
-                db.commit()
+            continue
 
 
 
 def refresh_bgg():
-    from boardgamegeek import BGGClient
-    from boardgamegeek.exceptions import BGGItemNotFoundError, BGGApiError
-    bgg = BGGClient()
+    bgg = _get_bgg_client()
+    BGGApiError = Exception
 
     db = get_db()
     bgg_ids = [row['id'] for row in db.execute("select id from bgg order by updated DESC")]
