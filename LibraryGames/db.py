@@ -1,18 +1,25 @@
 import asyncio
-from dataclasses import dataclass
-from datetime import date
+import html
+import pickle
 import re
 import sqlite3
+import string
+import warnings
 import xml.etree.ElementTree as ET
+from dataclasses import dataclass
+from datetime import date
 
 import aiohttp
+import click
+import requests
 from bgg_pi import BggClient as AsyncBggClient
 from bgg_pi.const import BASE_URL
-import click
+from bs4 import BeautifulSoup
+from bs4 import Tag
+from bs4 import XMLParsedAsHTMLWarning
 from flask import current_app
 from flask import g
 from flask.cli import with_appcontext
-import pickle
 
 
 @dataclass
@@ -81,7 +88,9 @@ class BggClientAdapter:
 
     async def _hot_items(self, item_type: str):
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{BASE_URL}/hot?type={item_type}", timeout=30) as response:
+            async with session.get(
+                f"{BASE_URL}/hot?type={item_type}", timeout=30
+            ) as response:
                 if response.status != 200:
                     return []
                 text = await response.text()
@@ -106,7 +115,9 @@ class BggClientAdapter:
         normalized_query = _normalize_bgg_title(query)
         params = {"query": query, "type": "boardgame"}
         async with aiohttp.ClientSession() as session:
-            async with session.get(f"{BASE_URL}/search", params=params, timeout=30) as response:
+            async with session.get(
+                f"{BASE_URL}/search", params=params, timeout=30
+            ) as response:
                 if response.status != 200:
                     return self._manual_search_results(normalized_query)
                 text = await response.text()
@@ -132,9 +143,10 @@ class BggClientAdapter:
 
             year_value = None
             year_node = item.find("yearpublished")
-            if year_node is not None and year_node.get("value"):
+            year_text = year_node.get("value") if year_node is not None else None
+            if year_text:
                 try:
-                    year_value = int(year_node.get("value"))
+                    year_value = int(year_text)
                 except ValueError:
                     year_value = None
 
@@ -147,7 +159,7 @@ class BggClientAdapter:
         for key, result in MANUAL_BGG_SEARCH.items():
             if key in normalized_query or normalized_query in key:
                 return [result]
-        return results
+        return []
 
     def game(self, game_id: int):
         return asyncio.run(self._game(int(game_id)))
@@ -159,7 +171,11 @@ class BggClientAdapter:
                 details = await client.fetch_thing_details([game_id])
             except Exception:
                 return MANUAL_BGG_GAMES.get(game_id)
-            async with session.get(f"{BASE_URL}/thing", params={"id": game_id, "stats": 1}, timeout=30) as response:
+            async with session.get(
+                f"{BASE_URL}/thing",
+                params={"id": game_id, "stats": 1},
+                timeout=30,
+            ) as response:
                 if response.status != 200:
                     return MANUAL_BGG_GAMES.get(game_id)
                 xml_text = await response.text()
@@ -177,7 +193,13 @@ class BggClientAdapter:
         if item is None:
             return None
 
-        designers = [link.get("value") for link in item.findall("link") if link.get("type") == "boardgamedesigner" and link.get("value")]
+        designers = [
+            value
+            for link in item.findall("link")
+            if link.get("type") == "boardgamedesigner"
+            for value in [link.get("value")]
+            if value is not None
+        ]
 
         ranks = []
         ranks_node = item.find("statistics/ratings/ranks")
@@ -207,6 +229,35 @@ class BggClientAdapter:
             ranks=ranks,
             designers=designers,
         )
+
+
+def _entry_text(entry: Tag, name: str) -> str | None:
+    node = entry.find(name)
+    if node is None:
+        return None
+    text = node.get_text(strip=True)
+    return text or None
+
+
+def _entry_href(entry: Tag) -> str | None:
+    link = entry.find("link")
+    if link is None:
+        return None
+    href = link.get("href")
+    return href if isinstance(href, str) and href else None
+
+
+def _parse_entry_content(content_text: str) -> dict[str, str]:
+    content: dict[str, str] = {}
+    for line in content_text.replace("<br/>", "\n").split("\n"):
+        if not line:
+            continue
+        parts = line.split(":", 1)
+        if len(parts) != 2:
+            continue
+        key, value = parts
+        content[key.strip()] = value.strip()
+    return content
 
 def get_db():
     """Connect to the application's configured database. The connection
@@ -255,6 +306,7 @@ def refresh_db_command():
     refresh_db()
     click.echo("Refreshed the database.")
 
+
 @click.command("refresh-bgg")
 @with_appcontext
 def refresh_bgg_command():
@@ -276,145 +328,140 @@ def init_app(app):
 def _get_bgg_client():
     return BggClientAdapter()
 
-def no_punctuation(s):
-    import string
-    return s.translate(str.maketrans('', '', string.punctuation))
 
-def hamming(s1,s2):
-    s1 = no_punctuation(s1).lower().split()
-    s2 = no_punctuation(s2).lower().split()
-    l = max(len(s1), len(s2))
-    #s1 = s1.ljust(l).lower()
-    #s2 = s2.ljust(l).lower()
-    #return sum(el1 != el2 for el1, el2 in zip(s1, s2))
-    d1,d2 =  sum(el1 not in s2 for el1 in s1) , sum(el2 not in s1 for el2 in s2)
-    return d1,d2
+def no_punctuation(value: str) -> str:
+    return value.translate(str.maketrans("", "", string.punctuation))
+
+
+def hamming(left: str, right: str) -> tuple[int, int]:
+    left_words = no_punctuation(left).lower().split()
+    right_words = no_punctuation(right).lower().split()
+    return (
+        sum(word not in right_words for word in left_words),
+        sum(word not in left_words for word in right_words),
+    )
 
 
 def refresh_db():
-    from bs4 import BeautifulSoup
-    from bs4 import XMLParsedAsHTMLWarning
-    import requests
-    import html
-    import string
-    import warnings
-
     bgg = _get_bgg_client()
-    BGGApiError = Exception
 
-    page = requests.get("https://anok.ent.sirsi.net/client/rss/hitlist/default/lm=TABLEGAMES&isd=true")
+    page = requests.get(
+        "https://anok.ent.sirsi.net/client/rss/hitlist/default/lm=TABLEGAMES&isd=true",
+        timeout=30,
+    )
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     soup = BeautifulSoup(page.text, features="html.parser")
     db = get_db()
-    libraryids = [row['id'] for row in db.execute("SELECT id FROM library WHERE bgg_id IS NOT NULL")]
-    found = [False]*len(libraryids)
+    libraryids = [
+        row["id"]
+        for row in db.execute("SELECT id FROM library WHERE bgg_id IS NOT NULL")
+    ]
+    found = [False] * len(libraryids)
     for game in soup.find_all("entry"):
-        libraryid = game.id.text.split(":")[-1]
+        if not isinstance(game, Tag):
+            continue
+
+        entry_id = _entry_text(game, "id")
+        libraryname = _entry_text(game, "title")
+        content_text = _entry_text(game, "content")
+        libraryurl = _entry_href(game)
+        if not entry_id or not libraryname or not content_text or not libraryurl:
+            continue
+
+        libraryid = entry_id.split(":")[-1]
         if int(libraryid) in libraryids:
             found[libraryids.index(int(libraryid))] = True
             continue
 
-        libraryname = html.unescape(game.title.text.strip())
-        libraryname = libraryname.replace("escape adventures.","")
-        librarycontent = html.unescape(game.content.text.strip())
-        librarycontent = [line.split(":") for line in librarycontent.replace("<br/>","\n").split("\n") if line]
-        content = dict([tuple(map(str.strip, line)) for line in librarycontent if len(line) == 2])
-        author = content.get("Author", "").translate(str.maketrans('', '', string.punctuation)).split()
-        year = int(content["Pub Date"])
-        libraryurl = game.link["href"]
+        libraryname = html.unescape(libraryname).replace("escape adventures.", "")
+        librarycontent = html.unescape(content_text)
+        content = _parse_entry_content(librarycontent)
+        author = content.get("Author", "").translate(
+            str.maketrans("", "", string.punctuation)
+        ).split()
         try:
             db.execute(
-                "INSERT INTO library (id, name,url) VALUES (?,?,?)",
+                "INSERT INTO library (id, name, url) VALUES (?, ?, ?)",
                 (libraryid, libraryname, libraryurl),
             )
             db.commit()
         except sqlite3.IntegrityError:
             pass
 
-        search_name = libraryname.replace(".",":")
-        if search_name.endswith("."): search_name = search_name[:-1]
+        search_name = libraryname.replace(".", ":")
+        if search_name.endswith("."):
+            search_name = search_name[:-1]
         search_name = search_name.replace(" :", ":")
         game_result = None
         while search_name:
             try:
                 games = bgg.search(no_punctuation(search_name))
                 games = sorted(games, key=lambda s: hamming(search_name, s.name))
-                #if len(games) > 1:
-                #    print("## looking at year", year, [g.year for g in games])
-                #    year_games = [g for g in games if abs(g.year - year) < 2]
-                #    if len(year_games) > 0:
-                #        games = year_games
                 if len(games) > 1:
-                    for g in games[:10]:
-                        game = bgg.game(game_id = g.id)
-                        if game is None:
+                    for candidate in games[:10]:
+                        candidate_game = bgg.game(game_id=candidate.id)
+                        if candidate_game is None:
                             continue
-                        hits = sum([a in " ".join(game.designers) for a in author])
+                        hits = sum(
+                            author_name in " ".join(candidate_game.designers)
+                            for author_name in author
+                        )
                         if hits > 0:
-                            game_result = g
+                            game_result = candidate
                             break
                     if game_result:
                         break
-                if len(games) > 0:
+                if games:
                     game_result = games[0]
                     break
-                else:
-                    search_name = ":".join(search_name.split(":")[:-1])
-                    search_name = search_name.strip()
-            except BGGApiError as e:
-                print(e)
+                search_name = ":".join(search_name.split(":")[:-1]).strip()
+            except Exception as exc:
+                print(exc)
                 bgg = _get_bgg_client()
         if game_result:
             try:
-                g = bgg.game(game_id = game_result.id)
-            except BGGApiError as e:
+                bgg_game = bgg.game(game_id=game_result.id)
+            except Exception:
                 bgg = _get_bgg_client()
-                g = bgg.game(game_id = game_result.id)
-            if g is not None:
+                bgg_game = bgg.game(game_id=game_result.id)
+            if bgg_game is not None:
                 db.execute(
-                    "REPLACE INTO bgg (id, gamep, updated) VALUES (?,?,?)",
-                    (g.id, pickle.dumps(g), str(date.today())),
+                    "REPLACE INTO bgg (id, gamep, updated) VALUES (?, ?, ?)",
+                    (bgg_game.id, pickle.dumps(bgg_game), str(date.today())),
                 )
                 db.execute(
                     "UPDATE library set bgg_id = ? where id = ?",
-                    (g.id, libraryid),
+                    (bgg_game.id, libraryid),
                 )
 
         db.commit()
-    for n,libraryid in enumerate(libraryids):
-        if not found[n]:
-            row = db.execute(
-                "select * FROM library where id = ?",
-                (libraryid,),
-                ).fetchone()
-            continue
-
-
-
 def refresh_bgg():
     bgg = _get_bgg_client()
-    BGGApiError = Exception
 
     db = get_db()
-    bgg_ids = [row['id'] for row in db.execute("select id from bgg order by updated DESC")]
+    bgg_ids = [
+        row["id"] for row in db.execute("SELECT id FROM bgg ORDER BY updated DESC")
+    ]
 
     i = 0
     for bggid in bgg_ids:
-        i+=1
+        i += 1
         print(f"{i} / {len(bgg_ids)}", end="\r", flush=True)
 
         retry = 5
-        while retry>0:
+        while retry > 0:
             try:
                 bgg_game = bgg.game(game_id=bggid)
+                if bgg_game is None:
+                    break
 
                 db.execute(
-                    "REPLACE INTO bgg (id, gamep, updated) VALUES (?,?,?)",
+                    "REPLACE INTO bgg (id, gamep, updated) VALUES (?, ?, ?)",
                     (bgg_game.id, pickle.dumps(bgg_game), str(date.today())),
                 )
                 db.commit()
                 retry = 0
-            except BGGApiError as e:
+            except Exception as exc:
                 retry -= 1
-                print(e, f"for game {bggid}")
+                print(exc, f"for game {bggid}")
     print()

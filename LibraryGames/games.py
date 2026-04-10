@@ -1,14 +1,13 @@
 from flask import Blueprint
 from flask import flash
-from flask import g
 from flask import redirect
 from flask import render_template
 from flask import request
-from flask import session
 from flask import url_for
-import pickle
-from werkzeug.exceptions import abort
 import datetime
+import pickle
+
+from werkzeug.exceptions import abort
 
 from LibraryGames.db import _get_bgg_client, get_db, refresh_db
 
@@ -79,12 +78,12 @@ def render(edit=False, listname=None, editlist=False, invert=False):
             game["sortby"] = int(rank) if rank else float('inf')
 
         games.append(game)
-    games = sorted(games, key=lambda g: g["sortby"])
+    games = sorted(games, key=lambda item: item["sortby"])
     if editlist:
         games = [g for g in games if g['id'] in games_in_list] + [g for g in games if g['id'] not in games_in_list]
     elif listname is not None:
         if invert:
-            games = [g for g in games if not g['id'] in games_in_list]
+            games = [g for g in games if g['id'] not in games_in_list]
         else:
             games = [g for g in games if g['id'] in games_in_list]
     return render_template("games/index.html", bgggames=games, othergames=games_without_bgg, edit=edit, editlist=editlist, listname=listname, checks =games_in_list, inverted=invert)

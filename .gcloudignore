@@ -15,5 +15,7 @@
 
 # Python pycache:
 __pycache__/
-# Ignored by the build system
-/setup.cfg
+.pytest_cache/
+.venv/
+htmlcov/
+uv.lock

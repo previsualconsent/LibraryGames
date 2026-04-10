@@ -1,10 +1,12 @@
 venv/
+.venv/
 *.pyc
 __pycache__/
 instance/
 .cache/
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 dist/
 build/
@@ -12,3 +14,5 @@ build/
 .idea/
 *.swp
 *~
+uv.lock
+.ruff_cache/

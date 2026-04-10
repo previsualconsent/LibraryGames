@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "LibraryGames"
+version = "1.0.0"
+description = "Anoka County Library board game catalog with optional BoardGameGeek enrichment"
+readme = "README.md"
+requires-python = ">=3.13"
+license = "BSD-3-Clause"
+authors = [
+  { name = "Peter Hansen", email = "previsualconsent@gmail.com" }
+]
+dependencies = [
+  "Flask>=3.1,<4",
+  "aiohttp>=3.13,<4",
+  "beautifulsoup4>=4.12,<5",
+  "bgg-pi>=0.1.1",
+  "requests>=2.32,<3",
+]
+
+[project.optional-dependencies]
+test = [
+  "coverage>=7.0,<8",
+  "pytest>=9.0,<10",
+  "pytest-cov>=6.0,<7",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["LibraryGames*"]
+
+[tool.setuptools.package-data]
+LibraryGames = [
+  "schema.sql",
+  "static/*",
+  "templates/**/*.html",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = [
+  "--cov=LibraryGames",
+  "--cov-report=term-missing",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["LibraryGames"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+
+[tool.uv]
+default-groups = ["test", "dev"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.10",
+    "ty>=0.0.29",
+]
+test = [
+  "coverage>=7.0,<8",
+  "pytest>=9.0,<10",
+  "pytest-cov>=6.0,<7",
+]

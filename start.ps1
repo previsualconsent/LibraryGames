@@ -12,17 +12,17 @@ Param(
    $run
 )
 
-$env:FLASK_APP = "LibraryGames"
+$env:FLASK_APP = "main:app"
 $env:FLASK_ENV = "development"
 if ($init) {
-   flask init-db
+   uv run flask init-db
 }
 if ($refreshbgg) {
-   flask refresh-bgg
+   uv run flask refresh-bgg
 }
 if ($refresh) {
-   flask refresh-db
+   uv run flask refresh-db
 }
 if ($run) {
-   flask run
+   uv run flask run
 }
