@@ -107,3 +107,65 @@ Known fallback behavior:
 - `uv sync` installs the default test and dev tool groups
 - Avoid reintroducing legacy Flask tutorial/blog artifacts
 - Prefer extending `tests/test_games.py` and `tests/test_db.py` for new behavior
+
+## Product Roadmap
+
+This roadmap captures the next major application improvements and the
+required verification bar for each phase.
+
+### Phase 1: Per-User Lists and Access Control
+
+- Introduce user-owned lists in the data model.
+- Restrict list routes to authenticated users.
+- Scope list reads and writes to the current user.
+- Hide list pages and list actions for anonymous users.
+
+Browser integration verification:
+
+- Anonymous users are redirected to login for `/lists` and `/list/*` routes.
+- User A cannot view or mutate User B list content.
+- Logged-in users can create, edit, and view only their own lists.
+
+### Phase 2: Non-Blocking Refresh and Status Tracking
+
+- Move refresh execution to a background job.
+- Add refresh status endpoints and persisted status records.
+- Display live refresh status in the UI while browsing games.
+
+Browser integration verification:
+
+- Triggering refresh returns immediately and does not block navigation.
+- Refresh status transitions are visible in the UI (`queued` -> `running` -> terminal state).
+- The games page remains interactive while refresh is in progress.
+
+### Phase 3: Edit Experience Overhaul and Delete Support
+
+- Replace the current edit flow with inline or reduced-click editing.
+- Improve BGG lookup ergonomics (search, select, confirm).
+- Add delete capabilities for list membership and safe game cleanup flows.
+
+Browser integration verification:
+
+- Users can update BGG linkage with fewer page transitions.
+- Users can remove games from their lists from the list view.
+- Delete actions require confirmation and update the UI without stale state.
+
+### Phase 4: Hardening, Observability, and Migration Tooling
+
+- Add structured logging around refresh and BGG operations.
+- Improve retries and resilience for external BGG/network failures.
+- Introduce formal DB migrations for schema evolution.
+
+Browser integration verification:
+
+- UI shows meaningful error and recovery states on refresh/BGG failures.
+- Existing user data remains intact after migration upgrades.
+- Critical paths (login, list access, refresh, edit) remain green after deployment migration.
+
+### Phase Exit Rule
+
+No phase is considered complete until:
+
+- unit tests pass,
+- lint and type checks pass, and
+- phase-specific browser integration tests pass in CI.
