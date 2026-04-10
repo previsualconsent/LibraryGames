@@ -98,6 +98,10 @@ def test_bgg_adapter_hot_items_handles_unauthorized(monkeypatch):
 def test_migrate_db_converts_legacy_list_schema(app):
     with app.app_context():
         db = get_db()
+        db.execute(
+            "INSERT INTO library (id, bgg_id, name, url) VALUES (?, ?, ?, ?)",
+            (1, None, "Legacy Game", "https://example.com/legacy"),
+        )
         db.execute("DROP TABLE list_game")
         db.execute("CREATE TABLE list_game (game_id INT, list_name TEXT)")
         db.execute("INSERT INTO list_game (game_id, list_name) VALUES (?, ?)", (1, "legacy"))

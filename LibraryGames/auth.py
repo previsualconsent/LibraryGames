@@ -12,6 +12,7 @@ from werkzeug.security import check_password_hash
 from werkzeug.security import generate_password_hash
 
 from LibraryGames.db import get_db
+from LibraryGames.db import run_with_db_retry
 
 bp = Blueprint("auth", __name__, url_prefix="/auth")
 
@@ -69,11 +70,13 @@ def register():
         if error is None:
             # the name is available, store it in the database and go to
             # the login page
-            db.execute(
-                "INSERT INTO user (username, password) VALUES (?, ?)",
-                (username, generate_password_hash(password)),
+            run_with_db_retry(
+                lambda: db.execute(
+                    "INSERT INTO user (username, password) VALUES (?, ?)",
+                    (username, generate_password_hash(password)),
+                )
             )
-            db.commit()
+            run_with_db_retry(db.commit)
             return redirect(url_for("auth.login", _external=True))
 
         flash(error)

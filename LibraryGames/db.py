@@ -10,6 +10,8 @@ import warnings
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import date
+from typing import Callable
+from typing import TypeVar
 
 import aiohttp
 import click
@@ -25,6 +27,7 @@ from flask.cli import with_appcontext
 
 
 LOGGER = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 @dataclass
@@ -65,23 +68,10 @@ def _normalize_bgg_title(value: str) -> str:
     return text
 
 
-MANUAL_BGG_GAMES = {
-    9209: BggGame(
-        id=9209,
-        name="Ticket to Ride",
-        year=2004,
-        ranks=[BggRank(id=1, friendlyname="Board Game Rank", value=None)],
-        designers=["Alan R. Moon"],
-    )
-}
+MANUAL_BGG_GAMES = {}
 
 
-MANUAL_BGG_SEARCH = {
-    "ticket to ride": BggSearchResult(id=9209, name="Ticket to Ride", year=2004),
-    "ticket to ride : the cross country train adventure game": BggSearchResult(
-        id=9209, name="Ticket to Ride", year=2004
-    ),
-}
+MANUAL_BGG_SEARCH = {}
 
 
 class BggClientAdapter:
@@ -271,11 +261,35 @@ def get_db():
     """
     if "db" not in g:
         g.db = sqlite3.connect(
-            current_app.config["DATABASE"], detect_types=sqlite3.PARSE_DECLTYPES
+            current_app.config["DATABASE"],
+            detect_types=sqlite3.PARSE_DECLTYPES,
+            timeout=30,
         )
         g.db.row_factory = sqlite3.Row
+        g.db.execute("PRAGMA foreign_keys = ON")
+        g.db.execute("PRAGMA journal_mode = WAL")
+        g.db.execute("PRAGMA busy_timeout = 30000")
 
     return g.db
+
+
+def run_with_db_retry(
+    operation: Callable[[], _T], retries: int = 20, delay: float = 0.25
+) -> _T:
+    last_error = None
+    for _ in range(retries):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower():
+                raise
+            last_error = exc
+            time.sleep(delay)
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError("Database retry loop exited unexpectedly")
 
 
 def close_db(e=None):

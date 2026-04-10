@@ -16,6 +16,7 @@ from werkzeug.exceptions import abort
 
 from LibraryGames.auth import login_required
 from LibraryGames.db import _get_bgg_client, get_db, refresh_db
+from LibraryGames.db import run_with_db_retry
 
 bp = Blueprint("games", __name__)
 
@@ -40,15 +41,17 @@ def _refresh_job_for_user(user_id: int):
 
 def _update_refresh_job(job_id: int, status: str, message: str | None = None, error: str | None = None):
     db = get_db()
-    db.execute(
-        "UPDATE refresh_job "
-        "SET status = ?, message = COALESCE(?, message), error = COALESCE(?, error), "
-        "started_at = CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE started_at END, "
-        "finished_at = CASE WHEN ? IN ('success', 'failed') THEN CURRENT_TIMESTAMP ELSE finished_at END "
-        "WHERE id = ?",
-        (status, message, error, status, status, job_id),
+    run_with_db_retry(
+        lambda: db.execute(
+            "UPDATE refresh_job "
+            "SET status = ?, message = COALESCE(?, message), error = COALESCE(?, error), "
+            "started_at = CASE WHEN ? = 'running' THEN CURRENT_TIMESTAMP ELSE started_at END, "
+            "finished_at = CASE WHEN ? IN ('success', 'failed') THEN CURRENT_TIMESTAMP ELSE finished_at END "
+            "WHERE id = ?",
+            (status, message, error, status, status, job_id),
+        )
     )
-    db.commit()
+    run_with_db_retry(db.commit)
 
 
 def _run_refresh_job(app, job_id: int):
@@ -70,11 +73,13 @@ def _get_list_row(user_id: int, listname: str):
 
 def _get_or_create_list_id(user_id: int, listname: str) -> int:
     db = get_db()
-    db.execute(
-        "INSERT OR IGNORE INTO list (user_id, name) VALUES (?, ?)",
-        (user_id, listname),
+    run_with_db_retry(
+        lambda: db.execute(
+            "INSERT OR IGNORE INTO list (user_id, name) VALUES (?, ?)",
+            (user_id, listname),
+        )
     )
-    db.commit()
+    run_with_db_retry(db.commit)
     row = _get_list_row(user_id, listname)
     if row is None:
         raise RuntimeError("Could not create list")
@@ -92,15 +97,19 @@ def _update_game_bgg_mapping(gameid: int, bggid: str):
     if not bgg_game:
         return False
 
-    db.execute(
-        "REPLACE INTO bgg (id, gamep, updated) VALUES (?, ?, CURRENT_DATE)",
-        (bgg_game.id, pickle.dumps(bgg_game)),
+    run_with_db_retry(
+        lambda: db.execute(
+            "REPLACE INTO bgg (id, gamep, updated) VALUES (?, ?, CURRENT_DATE)",
+            (bgg_game.id, pickle.dumps(bgg_game)),
+        )
     )
-    updated = db.execute(
-        "UPDATE library SET bgg_id = ? WHERE id = ?",
-        (bgg_game.id, gameid),
+    updated = run_with_db_retry(
+        lambda: db.execute(
+            "UPDATE library SET bgg_id = ? WHERE id = ?",
+            (bgg_game.id, gameid),
+        )
     )
-    db.commit()
+    run_with_db_retry(db.commit)
     return updated.rowcount > 0
 
 
@@ -332,14 +341,16 @@ def quick_edit_gameid(gameid):
 def set_null_gameid(gameid):
     """Remove BGG mapping from a game."""
     db = get_db()
-    updated = db.execute(
-        "UPDATE library SET bgg_id = ? WHERE id = ?",
-        (None, gameid),
+    updated = run_with_db_retry(
+        lambda: db.execute(
+            "UPDATE library SET bgg_id = ? WHERE id = ?",
+            (None, gameid),
+        )
     )
     if updated.rowcount == 0:
         abort(404)
 
-    db.commit()
+    run_with_db_retry(db.commit)
 
     flash("BGG mapping removed.")
     return redirect(url_for("games.set_edit"))
@@ -349,12 +360,18 @@ def set_null_gameid(gameid):
 @login_required
 def delete_game(gameid):
     db = get_db()
-    db.execute("DELETE FROM list_game WHERE game_id = ?", (gameid,))
-    deleted = db.execute("DELETE FROM library WHERE id = ?", (gameid,))
-    db.execute(
-        "DELETE FROM bgg WHERE id NOT IN (SELECT DISTINCT bgg_id FROM library WHERE bgg_id IS NOT NULL)"
+    run_with_db_retry(
+        lambda: db.execute("DELETE FROM list_game WHERE game_id = ?", (gameid,))
     )
-    db.commit()
+    deleted = run_with_db_retry(
+        lambda: db.execute("DELETE FROM library WHERE id = ?", (gameid,))
+    )
+    run_with_db_retry(
+        lambda: db.execute(
+            "DELETE FROM bgg WHERE id NOT IN (SELECT DISTINCT bgg_id FROM library WHERE bgg_id IS NOT NULL)"
+        )
+    )
+    run_with_db_retry(db.commit)
     if deleted.rowcount == 0:
         abort(404)
 
@@ -417,13 +434,17 @@ def set_editlist(listname):
     list_id = _get_or_create_list_id(g.user["id"], listname)
     if request.method == "POST":
         db = get_db()
-        db.execute("DELETE FROM list_game WHERE list_id = ?", (list_id,))
+        run_with_db_retry(
+            lambda: db.execute("DELETE FROM list_game WHERE list_id = ?", (list_id,))
+        )
         for key in request.form:
-            db.execute(
-                "INSERT INTO list_game (list_id, game_id) VALUES (?, ?)",
-                (list_id, int(key)),
+            run_with_db_retry(
+                lambda key=key: db.execute(
+                    "INSERT INTO list_game (list_id, game_id) VALUES (?, ?)",
+                    (list_id, int(key)),
+                )
             )
-        db.commit()
+        run_with_db_retry(db.commit)
         flash("List updated.")
 
     return render(listname=listname, editlist=True)
@@ -437,10 +458,12 @@ def remove_from_list(listname, gameid):
         abort(404)
 
     db = get_db()
-    db.execute(
-        "DELETE FROM list_game WHERE list_id = ? AND game_id = ?",
-        (list_row["id"], gameid),
+    run_with_db_retry(
+        lambda: db.execute(
+            "DELETE FROM list_game WHERE list_id = ? AND game_id = ?",
+            (list_row["id"], gameid),
+        )
     )
-    db.commit()
+    run_with_db_retry(db.commit)
     flash("Game removed from list.")
     return redirect(url_for("games.set_editlist", listname=listname))
