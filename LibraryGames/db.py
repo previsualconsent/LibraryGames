@@ -1,9 +1,11 @@
 import asyncio
 import html
+import logging
 import pickle
 import re
 import sqlite3
 import string
+import time
 import warnings
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -20,6 +22,9 @@ from bs4 import XMLParsedAsHTMLWarning
 from flask import current_app
 from flask import g
 from flask.cli import with_appcontext
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -315,6 +320,14 @@ def refresh_bgg_command():
     click.echo("Refreshed the database.")
 
 
+@click.command("migrate-db")
+@with_appcontext
+def migrate_db_command():
+    """Apply non-destructive schema migrations to existing databases."""
+    migrate_db()
+    click.echo("Database migrations completed.")
+
+
 def init_app(app):
     """Register database functions with the Flask app. This is called by
     the application factory.
@@ -323,6 +336,99 @@ def init_app(app):
     app.cli.add_command(init_db_command)
     app.cli.add_command(refresh_db_command)
     app.cli.add_command(refresh_bgg_command)
+    app.cli.add_command(migrate_db_command)
+
+
+def _table_columns(db: sqlite3.Connection, table_name: str) -> set[str]:
+    rows = db.execute(f"PRAGMA table_info({table_name})").fetchall()
+    return {row[1] for row in rows}
+
+
+def migrate_db() -> None:
+    db = get_db()
+
+    list_columns = _table_columns(db, "list") if _table_columns(db, "list") else set()
+    if not list_columns:
+        db.execute(
+            "CREATE TABLE list ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " user_id INTEGER NOT NULL,"
+            " name TEXT NOT NULL,"
+            " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            " UNIQUE (user_id, name),"
+            " FOREIGN KEY (user_id) REFERENCES user (id)"
+            ")"
+        )
+
+    list_game_columns = _table_columns(db, "list_game")
+    if "list_name" in list_game_columns:
+        users = db.execute("SELECT id FROM user ORDER BY id").fetchall()
+        default_user = users[0]["id"] if users else None
+        if default_user is None:
+            raise RuntimeError("Cannot migrate list data without at least one user.")
+
+        db.execute(
+            "CREATE TABLE list_game_new ("
+            " list_id INTEGER NOT NULL,"
+            " game_id INTEGER NOT NULL,"
+            " PRIMARY KEY (list_id, game_id),"
+            " FOREIGN KEY (list_id) REFERENCES list (id),"
+            " FOREIGN KEY (game_id) REFERENCES library (id)"
+            ")"
+        )
+
+        old_rows = db.execute(
+            "SELECT DISTINCT list_name FROM list_game WHERE list_name IS NOT NULL"
+        ).fetchall()
+        for row in old_rows:
+            list_name = row["list_name"]
+            db.execute(
+                "INSERT OR IGNORE INTO list (user_id, name) VALUES (?, ?)",
+                (default_user, list_name),
+            )
+            list_row = db.execute(
+                "SELECT id FROM list WHERE user_id = ? AND name = ?",
+                (default_user, list_name),
+            ).fetchone()
+            if list_row is None:
+                continue
+
+            memberships = db.execute(
+                "SELECT game_id FROM list_game WHERE list_name = ?",
+                (list_name,),
+            ).fetchall()
+            for membership in memberships:
+                db.execute(
+                    "INSERT OR IGNORE INTO list_game_new (list_id, game_id) VALUES (?, ?)",
+                    (list_row["id"], membership["game_id"]),
+                )
+
+        db.execute("DROP TABLE list_game")
+        db.execute("ALTER TABLE list_game_new RENAME TO list_game")
+
+    refresh_columns = _table_columns(db, "refresh_job") if _table_columns(db, "refresh_job") else set()
+    if not refresh_columns:
+        db.execute(
+            "CREATE TABLE refresh_job ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " created_by INTEGER NOT NULL,"
+            " status TEXT NOT NULL,"
+            " message TEXT,"
+            " error TEXT,"
+            " created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+            " started_at TIMESTAMP,"
+            " finished_at TIMESTAMP,"
+            " FOREIGN KEY (created_by) REFERENCES user (id)"
+            ")"
+        )
+
+    db.execute("CREATE INDEX IF NOT EXISTS idx_list_user_id ON list (user_id)")
+    db.execute("CREATE INDEX IF NOT EXISTS idx_list_game_list_id ON list_game (list_id)")
+    db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_refresh_job_user_created "
+        "ON refresh_job (created_by, created_at DESC)"
+    )
+    db.commit()
 
 
 def _get_bgg_client():
@@ -345,10 +451,25 @@ def hamming(left: str, right: str) -> tuple[int, int]:
 def refresh_db():
     bgg = _get_bgg_client()
 
-    page = requests.get(
-        "https://anok.ent.sirsi.net/client/rss/hitlist/default/lm=TABLEGAMES&isd=true",
-        timeout=30,
-    )
+    page = None
+    last_error = None
+    for attempt in range(1, 4):
+        try:
+            page = requests.get(
+                "https://anok.ent.sirsi.net/client/rss/hitlist/default/lm=TABLEGAMES&isd=true",
+                timeout=30,
+            )
+            page.raise_for_status()
+            break
+        except Exception as exc:
+            last_error = exc
+            LOGGER.warning("refresh_db feed attempt %s failed: %s", attempt, exc)
+            time.sleep(1)
+
+    if page is None:
+        raise RuntimeError(f"Could not fetch library feed: {last_error}")
+
+    LOGGER.info("refresh_db started")
     warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
     soup = BeautifulSoup(page.text, features="html.parser")
     db = get_db()
@@ -416,7 +537,7 @@ def refresh_db():
                     break
                 search_name = ":".join(search_name.split(":")[:-1]).strip()
             except Exception as exc:
-                print(exc)
+                LOGGER.warning("BGG search failed for '%s': %s", search_name, exc)
                 bgg = _get_bgg_client()
         if game_result:
             try:
@@ -435,6 +556,7 @@ def refresh_db():
                 )
 
         db.commit()
+    LOGGER.info("refresh_db completed")
 def refresh_bgg():
     bgg = _get_bgg_client()
 

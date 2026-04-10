@@ -11,7 +11,7 @@
       <li><a href="{{ url_for('auth.register') }}">Register</a></li>
       <li><a href="{{ url_for('auth.login') }}">Log In</a></li>
     {% endif %}
-    {% if has_games %}
+    {% if has_games and g.user %}
       <li><a class="action" href="{{ url_for('games.show_lists') }}">Lists</a></li>
       <li><a class="action" href="{{ url_for('games.refresh') }}">Refresh</a></li>
       <li><a class="action" href="{{ url_for('games.set_edit') }}">Edit</a></li>

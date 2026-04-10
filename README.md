@@ -64,6 +64,19 @@ uv run ruff check .
 uv run ty check
 ```
 
+Set up pre-commit hooks:
+
+```bash
+uv sync
+uv run pre-commit install
+```
+
+Run the configured hooks manually:
+
+```bash
+uv run pre-commit run --all-files
+```
+
 Generate an HTML coverage report:
 
 ```bash
@@ -105,6 +118,7 @@ Known fallback behavior:
 
 - Packaging is managed with `uv` and `pyproject.toml`
 - `uv sync` installs the default test and dev tool groups
+- Pre-commit hooks run `ruff` and `pytest` through `uv run`
 - Avoid reintroducing legacy Flask tutorial/blog artifacts
 - Prefer extending `tests/test_games.py` and `tests/test_db.py` for new behavior
 

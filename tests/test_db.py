@@ -5,6 +5,7 @@ import pytest
 from LibraryGames.db import BggClientAdapter
 from LibraryGames.db import get_db
 from LibraryGames.db import hamming
+from LibraryGames.db import migrate_db
 from LibraryGames.db import no_punctuation
 
 
@@ -92,3 +93,25 @@ def test_bgg_adapter_hot_items_handles_unauthorized(monkeypatch):
     )
 
     assert BggClientAdapter().hot_items("boardgame") == []
+
+
+def test_migrate_db_converts_legacy_list_schema(app):
+    with app.app_context():
+        db = get_db()
+        db.execute("DROP TABLE list_game")
+        db.execute("CREATE TABLE list_game (game_id INT, list_name TEXT)")
+        db.execute("INSERT INTO list_game (game_id, list_name) VALUES (?, ?)", (1, "legacy"))
+        db.commit()
+
+        migrate_db()
+
+        list_row = db.execute(
+            "SELECT id FROM list WHERE user_id = ? AND name = ?",
+            (1, "legacy"),
+        ).fetchone()
+        assert list_row is not None
+        membership = db.execute(
+            "SELECT game_id FROM list_game WHERE list_id = ?",
+            (list_row["id"],),
+        ).fetchone()
+        assert membership["game_id"] == 1

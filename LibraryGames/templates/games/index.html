@@ -23,6 +23,17 @@
 {% endblock %}
 
 {% block content %}
+  {% if g.user %}
+  <div id="refresh-status" data-url="{{ url_for('games.refresh_status') }}">
+    {% if refresh_status %}
+    <strong>Refresh:</strong> {{ refresh_status['status'] }}{% if refresh_status['message'] %} - {{ refresh_status['message'] }}{% endif %}
+    {% if refresh_status['error'] %}<div>{{ refresh_status['error'] }}</div>{% endif %}
+    {% else %}
+    <strong>Refresh:</strong> idle
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if editlist %}
   <form method='post'>
   {% endif %}
@@ -47,11 +58,25 @@
         {% if edit %}
         <td>
           <a class="action" href="{{ url_for('games.set_edit_gameid', gameid=game['id']) }}">Edit</a>
-          <a class="action" href="{{ url_for('games.set_null_gameid', gameid=game['id']) }}">Null</a>
+          <form method="post" action="{{ url_for('games.quick_edit_gameid', gameid=game['id']) }}">
+            <input name="bggid" value="{{ game['bggid'] }}" size="8">
+            <input type="submit" value="Save ID">
+          </form>
+          <a class="action" href="{{ url_for('games.set_null_gameid', gameid=game['id']) }}">Remove BGG Link</a>
+          <form method="post" action="{{ url_for('games.delete_game', gameid=game['id']) }}" onsubmit="return confirm('Delete this game from the catalog?');">
+            <input type="submit" value="Delete">
+          </form>
         </td>
         {% endif %}
         {% if editlist %}
-        <td><input type="checkbox" name="{{game['id']}}" {% if game['id'] in checks %} checked {% endif %}></td>
+        <td>
+          <input type="checkbox" name="{{game['id']}}" {% if game['id'] in checks %} checked {% endif %}>
+          {% if game['id'] in checks %}
+          <form method="post" action="{{ url_for('games.remove_from_list', listname=listname, gameid=game['id']) }}">
+            <input type="submit" value="Remove">
+          </form>
+          {% endif %}
+        </td>
         {% endif %}
         <td><a class='link' title="{{game['lname']}}" href="{{game['bggurl']}}">{{ game['name'] }}</a><span class='year'> ({{game['year']}}) </span></td>
         <td><a class='link' href="{{game['url']}}"> Checkout </a></td>
@@ -69,10 +94,26 @@
   {% for game in othergames %}
       <tr>
         {% if edit %}
-        <td><a class="action" href="{{ url_for('games.set_edit_gameid', gameid=game['id']) }}">Edit</a></td>
+        <td>
+          <a class="action" href="{{ url_for('games.set_edit_gameid', gameid=game['id']) }}">Edit</a>
+          <form method="post" action="{{ url_for('games.quick_edit_gameid', gameid=game['id']) }}">
+            <input name="bggid" value="{{ game['bgg_id'] or '' }}" size="8">
+            <input type="submit" value="Save ID">
+          </form>
+          <form method="post" action="{{ url_for('games.delete_game', gameid=game['id']) }}" onsubmit="return confirm('Delete this game from the catalog?');">
+            <input type="submit" value="Delete">
+          </form>
+        </td>
         {% endif %}
         {% if editlist %}
-        <td><input type="checkbox" name="{{game['id']}}"{% if game['id'] in checks %} checked {% endif %}></td>
+        <td>
+          <input type="checkbox" name="{{game['id']}}"{% if game['id'] in checks %} checked {% endif %}>
+          {% if game['id'] in checks %}
+          <form method="post" action="{{ url_for('games.remove_from_list', listname=listname, gameid=game['id']) }}">
+            <input type="submit" value="Remove">
+          </form>
+          {% endif %}
+        </td>
         {% endif %}
         <td>{{ game['lname'] }}</td>
         <td><a class='link' href="{{game['url']}}">Checkout</a></td>
@@ -85,5 +126,33 @@
   </table>
   {% if editlist %}
   </form>
+  {% endif %}
+
+  {% if g.user %}
+  <script>
+    (function () {
+      const root = document.getElementById('refresh-status');
+      if (!root) return;
+      const endpoint = root.dataset.url;
+      const render = (payload) => {
+        let text = `<strong>Refresh:</strong> ${payload.status}`;
+        if (payload.message) text += ` - ${payload.message}`;
+        if (payload.error) text += `<div>${payload.error}</div>`;
+        root.innerHTML = text;
+      };
+      const poll = () => fetch(endpoint)
+        .then((response) => response.json())
+        .then((payload) => {
+          render(payload);
+          if (payload.status === 'queued' || payload.status === 'running') {
+            setTimeout(poll, 2000);
+          }
+        })
+        .catch(() => {
+          setTimeout(poll, 5000);
+        });
+      poll();
+    })();
+  </script>
   {% endif %}
 {% endblock %}

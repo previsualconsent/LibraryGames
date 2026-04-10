@@ -5,6 +5,12 @@
 {% endblock %}
 
 {% block content %}
+<form method="post" action="{{ url_for('games.create_list') }}">
+  <label for="listname">New List</label>
+  <input name="listname" id="listname" required>
+  <input type="submit" value="Create">
+</form>
+
 <ul>
   {% for name in names %}
   <li><a href="{{ url_for('games.set_list', listname=name) }}">{{name}}</a></li>

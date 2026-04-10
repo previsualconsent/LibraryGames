@@ -60,6 +60,7 @@ default-groups = ["test", "dev"]
 
 [dependency-groups]
 dev = [
+  "pre-commit>=4.3,<5",
     "ruff>=0.15.10",
     "ty>=0.0.29",
 ]
