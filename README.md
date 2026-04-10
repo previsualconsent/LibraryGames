@@ -51,10 +51,32 @@ Run the development server:
 uv run flask --app main:app run --host 127.0.0.1 --port 5055
 ```
 
+Run the app against a separate local sandbox database:
+
+```bash
+export LIBRARY_GAMES_DATABASE="$PWD/instance/library-games.sandbox.sqlite"
+uv run flask --app main:app init-db
+uv run flask --app main:app run --host 127.0.0.1 --port 5055
+```
+
+This is the recommended way to do manual browser testing without affecting your main local app data.
+
 Run tests:
 
 ```bash
 uv run pytest
+```
+
+Install the Playwright browser runtime:
+
+```bash
+uv run playwright install chromium
+```
+
+Run real browser end-to-end tests:
+
+```bash
+uv run pytest tests/test_playwright_e2e.py -m e2e
 ```
 
 Run lint and type checks:
@@ -119,6 +141,7 @@ Known fallback behavior:
 - Packaging is managed with `uv` and `pyproject.toml`
 - `uv sync` installs the default test and dev tool groups
 - Pre-commit hooks run `ruff` and `pytest` through `uv run`
+- Playwright is the chosen browser workflow testing framework
 - Avoid reintroducing legacy Flask tutorial/blog artifacts
 - Prefer extending `tests/test_games.py` and `tests/test_db.py` for new behavior
 

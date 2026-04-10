@@ -1,7 +1,10 @@
 import os
+import socket
 import tempfile
+import threading
 
 import pytest
+from werkzeug.serving import make_server
 
 from LibraryGames import create_app
 from LibraryGames.db import get_db
@@ -60,3 +63,36 @@ class AuthActions(object):
 @pytest.fixture
 def auth(client):
     return AuthActions(client)
+
+
+def _find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        sock.listen(1)
+        return sock.getsockname()[1]
+
+
+@pytest.fixture
+def live_server(app):
+    port = _find_free_port()
+    server = make_server("127.0.0.1", port, app)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    yield f"http://127.0.0.1:{port}"
+
+    server.shutdown()
+    thread.join(timeout=5)
+
+
+@pytest.fixture
+def page():
+    playwright = pytest.importorskip("playwright.sync_api")
+
+    with playwright.sync_playwright() as sync_api:
+        browser = sync_api.chromium.launch(headless=True)
+        page = browser.new_page()
+        try:
+            yield page
+        finally:
+            browser.close()

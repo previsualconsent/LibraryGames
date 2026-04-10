@@ -6,12 +6,16 @@ from flask import request
 
 def create_app(test_config=None):
     """Create and configure an instance of the Flask application."""
+    default_database = os.environ.get(
+        "LIBRARY_GAMES_DATABASE",
+        os.path.join(os.path.dirname(__file__), "..", "instance", "library-games.sqlite"),
+    )
     app = Flask(__name__, instance_relative_config=True)
     app.config.from_mapping(
         # a default secret that should be overridden by instance config
         SECRET_KEY="dev",
         # store the database in the instance folder
-        DATABASE=os.path.join(app.instance_path, "library-games.sqlite"),
+        DATABASE=os.path.abspath(default_database),
     )
 
     if test_config is None:
